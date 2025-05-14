@@ -1,0 +1,156 @@
+from fastapi import APIRouter, HTTPException, status, Depends
+from pydantic import BaseModel, Field
+from models.prompt import Prompt  
+from tortoise.exceptions import IntegrityError
+from helpers.get_current_user import get_current_user
+from typing import Annotated
+from models.user import User
+from models.conversation import Conversation
+import httpx
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # Load variables from .env
+router = APIRouter()
+
+# ################################ Prompt Payload #################################
+class PromptPayload(BaseModel):
+    prompt: str = Field(..., max_length=255, description="The prompt message to store"),
+    conversation_id : int
+
+# Getting Groq API Key from .env
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# ################################ Create Prompt with AI Response #################################
+@router.post("/prompts", status_code=status.HTTP_201_CREATED)
+async def create_prompt(
+    data: PromptPayload,
+    user: Annotated[User, Depends(get_current_user)]
+):
+    try:
+        ai_response = "AI failed to generate a response."  # default fallback
+
+        # Sending the prompt to Groq AI
+        if GROQ_API_KEY:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                        "messages": [{"role": "user", "content": data.prompt}]
+                    },
+                )
+
+                # Debug output
+                # print("GROQ API status:", response.status_code)
+                # print("GROQ API response:", response.text)
+
+                if response.status_code == 200:
+                    res_data = response.json()
+                    ai_response = res_data["choices"][0]["message"]["content"]
+        else:
+            print("GROQ_API_KEY is missing or invalid in .env")
+
+        # Saving in the database (both prompt + response)
+        prompt = await Prompt.create(
+            prompt=data.prompt,
+            response=ai_response,
+            user=user,
+            conversation_id = data.conversation_id
+
+        )
+
+        return {
+            "success": True,
+            "message": "Prompt and response saved successfully.",
+            "data": {
+                "id": prompt.id,
+                "prompt": prompt.prompt,
+                "response": prompt.response,
+                "conversation_id": prompt.conversation_id
+            }
+        }
+
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error occurred while saving the prompt."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal Server Error: {e}"
+        )
+
+
+# ################################ Fetch Prompts by Conversation ID #################################
+@router.get("/prompts/by-conversation/{conversation_id}")
+async def get_prompts_by_conversation(
+    conversation_id: int,
+    user: Annotated[User, Depends(get_current_user)]
+):
+    prompts = await Prompt.filter(
+        user=user,
+        conversation_id=conversation_id
+    ).order_by("created_at").values(
+        "id", "prompt", "response", "conversation_id", "created_at", "updated_at"
+    )
+    return {"success": True, "data": prompts}
+
+
+# ################################ Delete Prompts by Conversation ID #################################
+@router.delete("/prompts/by-conversation/{conversation_id}")
+async def delete_conversation_by_id(
+    conversation_id: int,
+    user: Annotated[User, Depends(get_current_user)]
+):
+    deleted_count = await Prompt.filter(
+        user=user,
+        conversation_id=conversation_id
+    ).delete()
+
+    if deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Conversation not found or already deleted")
+
+    return {"success": True, "message": f"Deleted {deleted_count} prompts from conversation {conversation_id}"}
+
+# ################################ Fetch all Prompts for a User #################################
+@router.get("/conversations")
+async def get_conversations(user: Annotated[User, Depends(get_current_user)]):
+    prompts = await Prompt.filter(user=user).order_by("-created_at").values("conversation_id", "created_at", "prompt")
+    
+    # Dictionary to hold latest prompt per conversation_id
+    unique_conversations = {}
+    for p in prompts:
+        cid = p["conversation_id"]
+        if cid not in unique_conversations:
+            unique_conversations[cid] = {
+                "id": cid,
+                "title": p["prompt"][:30] if p["prompt"] else "Untitled Chat",
+                "created_at": p["created_at"],
+            }
+
+    return {"success": True, "data": list(unique_conversations.values())}
+
+
+######################   Deleting a Prompt and its response #########################
+@router.delete("/prompts/{prompt_id}")
+async def delete_prompt_by_id(
+    prompt_id: int,
+    user: Annotated[User, Depends(get_current_user)]
+):
+    prompt = await Prompt.get_or_none(id=prompt_id, user=user)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found or unauthorized")
+    
+    await prompt.delete()
+    return {"success": True, "message": f"Prompt {prompt_id} deleted successfully"}
+
+
+    
+
+    

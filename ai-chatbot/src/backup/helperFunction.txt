@@ -1,0 +1,46 @@
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
+from models.prompt import Prompt
+from models.user import User
+from tortoise.exceptions import IntegrityError
+from pydantic import BaseModel, Field
+import os
+from dotenv import load_dotenv
+from  typing import Annotated
+from helpers.get_current_user import get_current_user
+# Load environment variables
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM")
+
+# Set up OAuth2PasswordBearer to extract the token from the request
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
+
+
+# Function to get the current logged-in user from the token
+
+router = APIRouter()
+
+# Define Pydantic model to validate the prompt data
+class PromptPayload(BaseModel):
+    prompt: str = Field(..., max_length=255, description="The prompt message to store")
+
+# Endpoint to store a new prompt message
+@router.post("/prompts", status_code=status.HTTP_201_CREATED)
+async def create_prompt(data: PromptPayload, current_user: Annotated[User, Depends((get_current_user))]):
+    try:
+        # Create a new prompt record associated with the logged-in user
+        prompt = await Prompt.create(prompt=data.prompt, user=current_user)
+        return {"success": True, "message": "Prompt saved successfully.", "id": prompt.id}
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error occurred while saving the prompt."
+        )
+
+# Endpoint to get all prompts for the current logged-in user
+@router.get("/prompts")
+async def get_prompts(current_user: User = Depends(get_current_user)):
+    prompts = await Prompt.filter(user=current_user).values("id", "prompt", "created_at", "updated_at")
+    return {"success": True, "data": prompts}

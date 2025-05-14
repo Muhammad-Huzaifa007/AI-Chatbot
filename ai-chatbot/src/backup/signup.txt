@@ -1,0 +1,43 @@
+class SignupPayload(BaseModel):
+    user_name: str = Field(min_length=2, max_length=255)
+    email: str = Field(min_length=2, max_length=255)
+    password: str = Field(min_length=2, max_length=255)
+
+    async def check_unique(self):
+        # Checking if the username or email already exists in the database
+        user = await User.filter(user_name=self.user_name).first()
+        if user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already exists"
+            )
+
+        email = await User.filter(email=self.email).first()
+        if email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+
+    def hash_password(self):
+        # Hashing the password before storing it
+        hashed_password = bcrypt.hashpw(self.password.encode('utf-8'), bcrypt.gensalt())
+        return hashed_password.decode('utf-8')
+
+
+@router.post("/signup")
+async def signup(data: SignupPayload):
+    await data.check_unique()
+    hashed_password = data.hash_password()
+
+    try:
+        await User.create(user_name=data.user_name, email=data.email, password=hashed_password)
+        return {
+            "success": True,
+            "message": "Signed up successfully."
+        }
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error occurred while creating the user."
+        )

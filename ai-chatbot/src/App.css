@@ -1,0 +1,17 @@
+@keyframes scaleOutward {
+    0%, 100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.2);
+    }
+  }
+  
+  .scale-outward {
+    animation: scaleOutward 5s ease-in-out infinite;
+  }
+
+.scroll-none::-webkit-scrollbar{
+  display: none;
+}
+  
